@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+kikuenv/
+models/*
+!models/.gitkeep
+data/*
+!data/.gitkeep
+voices/*
+!voices/.gitkeep
+*.log

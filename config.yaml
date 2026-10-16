@@ -1,0 +1,139 @@
+# ============================================================
+#  Кику — конфигурация
+# ============================================================
+
+persona:
+  name: "Кику"
+  owner_title: "хозяин"        # как Кику обращается к вам
+  extra: ""                    # любые доп. указания к характеру, например "иногда шути"
+
+security:
+  offline: true                # true = после скачивания моделей сеть для HF запрещена
+  dry_run: false               # true = инструменты ничего не делают, только пишут в лог
+  # Кику может работать ТОЛЬКО внутри этих папок.
+  # @Desktop/@Documents/@Downloads/@Pictures/@Music/@Videos — системные папки Windows
+  allowed_roots:
+    - "@Desktop"
+    - "@Documents"
+    - "@Downloads"
+    - "~/kiku_workspace"
+  workspace: "~/kiku_workspace"   # сюда попадают файлы с относительным путём
+  max_file_bytes: 1000000         # максимум 1 МБ на создаваемый файл
+  max_read_chars: 4000            # сколько символов Кику читает из текстового файла за раз
+  # Расширения, которые Кику не создаёт и не открывает
+  blocked_extensions: [".exe", ".dll", ".msi", ".scr", ".com", ".lnk", ".url", ".reg",
+                       ".hta", ".cpl", ".pif", ".sys", ".bat", ".cmd", ".ps1", ".psm1",
+                       ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".jar", ".msix"]
+
+# Приложения, которые Кику имеет право запускать (белый список!).
+# command — путь к .exe, имя из PATH или URI (steam://...).
+apps:
+  - id: cs2
+    title: "Counter-Strike 2"
+    command: "steam://rungameid/730"      # нужен установленный Steam
+    aliases: ["кс", "кс2", "кс го", "контра", "контр страйк", "counter strike", "cs", "cs2", "cs go"]
+  - id: notepad
+    title: "Блокнот"
+    command: "notepad.exe"
+    aliases: ["блокнот", "notepad"]
+  - id: calc
+    title: "Калькулятор"
+    command: "calc.exe"
+    aliases: ["калькулятор", "calculator"]
+  - id: explorer
+    title: "Проводник"
+    command: "explorer.exe"
+    aliases: ["проводник", "explorer"]
+  # Пример для браузера (поправьте путь):
+  # - id: chrome
+  #   title: "Google Chrome"
+  #   command: "C:/Program Files/Google/Chrome/Application/chrome.exe"
+  #   aliases: ["хром", "браузер", "chrome"]
+
+# Быстрый путь: типовые команды («открой загрузки», «запусти кс», «громче», «сверни вс код»,
+# «который час», «какие у меня задачи») выполняются сразу, без языковой модели.
+router:
+  enabled: true
+
+# Разговорные названия окон -> часть заголовка окна в Windows.
+# Заголовки смотрите командой «Кику, какие окна открыты?» (инструмент list_windows).
+windows:
+  aliases:
+    - {title: "Visual Studio Code", names: ["вс код", "вскод", "vs code", "vscode", "визуал студио код", "код"]}
+    - {title: "Visual Studio", names: ["вс студио", "визуал студио", "visual studio", "студия", "вижуал студио"]}
+    - {title: "Google Chrome", names: ["хром", "гугл хром", "chrome", "браузер"]}
+    - {title: "Telegram", names: ["телеграм", "телега", "telegram"]}
+    - {title: "Discord", names: ["дискорд", "discord"]}
+    - {title: "Steam", names: ["стим", "steam"]}
+
+llm:
+  backend: llama_cpp
+  # Рекомендуемая стартовая модель: MoE (3B активных параметров) — быстро на CPU,
+  # неплохо знает русский, не думает вслух (non-thinking), хорошо следует системному промпту.
+  repo_id: "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF"
+  file_pattern: "*Q4_K_M*.gguf"          # ~18 ГБ
+  # Более лёгкий вариант (~2.5 ГБ, заметно глупее):
+  #   repo_id: "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+  #   file_pattern: "*Q4_K_M*.gguf"
+  # Новее и сильнее (но llama-cpp-python может не поддерживать архитектуру — проверьте):
+  #   repo_id: "unsloth/Qwen3.6-35B-A3B-GGUF"
+  #   file_pattern: "*UD-Q4_K_M*.gguf"
+  n_ctx: 8192
+  n_gpu_layers: 0          # 0 = всё на CPU (оставляем 4 ГБ VRAM под ASR и TTS). Можно пробовать 4..12
+  n_threads: 0             # 0 = авто
+  temperature: 0.3
+  max_tokens: 200
+  max_steps: 5             # максимум вызовов инструментов за одну реплику
+  history_turns: 8         # сколько последних обменов репликами помнить в диалоге
+
+asr:
+  enabled: true
+  model: "large-v3-turbo"  # faster-whisper; если мало VRAM: "small" или device: cpu
+  device: "auto"           # auto | cuda | cpu
+  compute_type: "auto"     # auto → cuda: int8_float16, cpu: int8
+  language: "ru"
+  initial_prompt: "Кику, открой папку «Загрузки». Создай файл. Запусти кс. Какие у меня задачи?"
+  no_speech_threshold: 0.6
+
+audio:
+  sample_rate: 16000
+  input_device: null       # null = микрофон по умолчанию; можно указать номер из sounddevice
+  vad_threshold: 0.5
+  min_silence_ms: 700      # пауза, после которой фраза считается законченной
+  max_utterance_sec: 20
+
+wake:
+  words: ["кику", "кики", "кеку", "куку", "kiku"]
+  fuzzy_ratio: 0.75
+  conversation_window_sec: 25   # после ответа Кику ещё столько секунд слушает без имени; 0 = имя нужно в КАЖДОЙ команде
+
+tts:
+  enabled: true
+  # clone  — клонирование голоса из voices/kiku_ref.wav (рекомендуется; см. scripts/design_voice.py)
+  # custom — готовый тембр из Qwen3-TTS-0.6B-CustomVoice (без подготовки, но тембры не родные для русского)
+  mode: "clone"
+  base_repo: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+  custom_repo: "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+  design_repo: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"   # нужен один раз, чтобы придумать голос
+  speaker: "Serena"          # для mode: custom
+  language: "Russian"
+  device: "cuda:0"           # "cpu" если не хватает VRAM (будет медленно)
+  dtype: "bfloat16"
+  attn_implementation: "sdpa"   # "flash_attention_2" на Windows обычно недоступен
+  max_spoken_chars: 160       # озвучивается только начало ответа (целые предложения); на экране показывается весь текст
+  prewarm: true               # в простое заранее озвучивать типовые фразы, чтобы они потом звучали мгновенно
+  chunk_chars: 400            # реплика озвучивается одним куском; длиннее — режется на крупные части
+  cache: true                 # кэш готовых фраз на диске: повторяющиеся реплики звучат мгновенно
+  cache_dir: "data/tts_cache"
+  ref_audio: "voices/kiku_ref.wav"
+  ref_text_file: "voices/kiku_ref.txt"
+
+memory:
+  db_path: "data/kiku.db"
+  audit_path: "data/audit.jsonl"
+  max_facts_in_prompt: 30
+
+gui:
+  width: 560
+  height: 900
+  always_on_top: false

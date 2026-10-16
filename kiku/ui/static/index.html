@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Кику</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; --bg:#14121b; --panel:#1d1a29; --ink:#ece8f7; --mute:#8d86a6; --acc:#b28cff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink);
+         display:grid; grid-template-columns: 280px 1fr; height:100vh; }
+  #side { background:var(--panel); display:flex; flex-direction:column; align-items:center; padding:24px 12px; gap:12px; }
+  /* Здесь позже живёт аватар (Live2D/VRM). Пока — круг, реагирующий на состояние. */
+  #avatar { width:160px; height:160px; border-radius:50%; background:radial-gradient(circle at 35% 30%, #d7c2ff, #7c52d8);
+            transition: transform .3s, box-shadow .3s; box-shadow:0 0 0 0 rgba(178,140,255,.0); }
+  #avatar.thinking { animation: pulse 1.2s infinite; }
+  #avatar.speaking { animation: talk .5s infinite alternate; }
+  @keyframes pulse { 50% { transform: scale(.94); box-shadow:0 0 30px 6px rgba(178,140,255,.35);} }
+  @keyframes talk  { to { transform: scale(1.06); box-shadow:0 0 36px 10px rgba(178,140,255,.45);} }
+  #state { color:var(--mute); font-size:14px; }
+  #main { display:flex; flex-direction:column; min-width:0; }
+  #log { flex:1; overflow:auto; padding:20px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:75%; padding:10px 14px; border-radius:14px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .me { align-self:flex-end; background:#33294f; }
+  .bot { align-self:flex-start; background:var(--panel); }
+  .tool { align-self:flex-start; color:var(--mute); font-size:13px; }
+  form { display:flex; gap:8px; padding:12px; background:var(--panel); }
+  input { flex:1; padding:12px; border-radius:10px; border:1px solid #3a3552; background:var(--bg); color:var(--ink); font:inherit; }
+  button { padding:0 20px; border:0; border-radius:10px; background:var(--acc); color:#1a1030; font-weight:600; cursor:pointer; }
+</style>
+</head>
+<body>
+<div id="side"><div id="avatar"></div><b>Кику</b><div id="state">готова</div></div>
+<div id="main">
+  <div id="log"></div>
+  <form id="f"><input id="t" autocomplete="off" placeholder="Напишите Кику…" autofocus><button>Отправить</button></form>
+</div>
+<script>
+const log = document.getElementById('log'), avatar = document.getElementById('avatar'),
+      stateEl = document.getElementById('state'), input = document.getElementById('t');
+const LABEL = { idle:'готова', thinking:'думает…', speaking:'говорит…' };
+function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls;
+  d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; }   // textContent: без XSS
+const ws = new WebSocket(`ws://${location.host}/ws`);
+ws.onmessage = (e) => { const m = JSON.parse(e.data);
+  if (m.type === 'say') add('bot', m.text);
+  else if (m.type === 'tool') add('tool', `⚙ ${m.name}: ${m.ok ? 'ok' : 'ошибка'}`);
+  else if (m.type === 'state') { avatar.className = m.state; stateEl.textContent = LABEL[m.state] || m.state; } };
+ws.onclose = () => add('tool', 'соединение закрыто');
+document.getElementById('f').onsubmit = (e) => { e.preventDefault();
+  const text = input.value.trim(); if (!text) return; add('me', text);
+  ws.send(JSON.stringify({ text })); input.value = ''; };
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# --- окно с Кику ---
+# tkinter входит в установщик Python с python.org (галочка "tcl/tk and IDLE")
+Pillow>=10.0

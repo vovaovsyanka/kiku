@@ -1,0 +1,8 @@
+# --- голосовой режим ---
+# torch ставится ОТДЕЛЬНО под вашу CUDA, см. README (шаг 2)
+numpy
+sounddevice
+soundfile
+faster-whisper>=1.1.0
+silero-vad>=5.1
+qwen-tts
