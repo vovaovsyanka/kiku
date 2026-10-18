@@ -95,7 +95,8 @@ class Router:
 
         if t in _TIME:
             res = self._call(steps, "get_time")
-            return Routed(f"Сейчас {res['result']}." if res["ok"] else self._err(res), steps)
+            when = re.sub(r"\s\d{4}(?=,)", "", res["result"]) if res["ok"] else ""   # год в ответе лишний
+            return Routed(f"Сейчас {when}." if res["ok"] else self._err(res), steps)
 
         if t in _TASKS:
             res = self._call(steps, "list_tasks", status="open")

@@ -5,7 +5,6 @@
 """
 import sys
 import time
-from typing import Optional
 
 from .registry import ToolContext, ToolError, ToolRegistry
 

@@ -110,11 +110,11 @@ class Agent:
         if fn:
             fn([self._system(), {"role": "user", "content": f"[{now_ru()}] привет"}])
 
-    def _remember_turn(self, user_text: str, final: str) -> None:
-        self.history += [
-            {"role": "user", "content": user_text},
-            {"role": "assistant", "content": json.dumps({"actions": [], "say": final}, ensure_ascii=False)},
-        ]
+    def _remember_turn(self, user_msg: dict, final: str, raw: Optional[str] = None) -> None:
+        """В историю кладём РОВНО те сообщения, которые видела модель (с меткой времени и её сырым JSON):
+        тогда llama.cpp находит общее начало с прошлым запросом и не пересчитывает всю историю заново."""
+        assistant = raw if raw else json.dumps({"actions": [], "say": final}, ensure_ascii=False)
+        self.history += [user_msg, {"role": "assistant", "content": assistant}]
         self.history = self.history[-2 * int(self.cfg.llm.history_turns):]
 
     def respond(self, user_text: str, on_say: Optional[Callable[[str], None]] = None,
@@ -122,6 +122,8 @@ class Agent:
         """on_say вызывается для каждой фразы, которую нужно озвучить/показать. Возвращает финальную фразу."""
         say_cb = on_say or (lambda s: None)
         tool_cb = on_tool or (lambda *a: None)
+        # Время идёт в сообщение хозяина, а не в системный промпт (чтобы не ломать кэш промпта).
+        user_msg = {"role": "user", "content": f"[{now_ru()}] {user_text}"}
 
         # Быстрый путь: типовые команды выполняются без языковой модели.
         if self.router is not None:
@@ -130,18 +132,19 @@ class Agent:
                 for tool, args, result in routed.steps:
                     tool_cb(tool, args, result)
                 say_cb(routed.say)
-                self._remember_turn(user_text, routed.say)
+                self._remember_turn(user_msg, routed.say)
                 return routed.say
 
         system = self._system()
-        # Время идёт в сообщение хозяина, а не в системный промпт (чтобы не ломать кэш промпта).
-        turn = [{"role": "user", "content": f"[{now_ru()}] {user_text}"}]
+        turn = [user_msg]
+        last_raw = None
         seen: dict = {}
         tainted = False   # в контексте есть текст из файла (недоверенный): менять систему больше нельзя
         final = ""
 
         for _ in range(int(self.cfg.llm.max_steps)):
             raw = self.llm.chat_json([system] + self.history + turn, schema=self._schema())
+            last_raw = raw
             act = parse_action(raw)
             log.debug("LLM: %s", raw)
 
@@ -194,5 +197,10 @@ class Agent:
             final = "Не получилось довести дело до конца за разумное число шагов."
             say_cb(final)
 
-        self._remember_turn(user_text, final)
+        self._remember_turn(user_msg, final, last_raw if self._raw_matches(last_raw, final) else None)
         return final
+
+    @staticmethod
+    def _raw_matches(raw: Optional[str], final: str) -> bool:
+        """Сырой ответ модели годится для истории, только если его say и есть итоговая фраза."""
+        return bool(raw) and parse_action(raw).say.strip() == final.strip()
