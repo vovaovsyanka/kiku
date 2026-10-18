@@ -3,6 +3,7 @@
 Не зависит от интерфейса: консоль и окно подключаются через Hooks.
 Полудуплекс: пока Кику говорит, микрофон закрыт (так она не слышит саму себя).
 Команды можно вводить и текстом (submit) — они не требуют имени.
+Текст ответа показывается в тот момент, когда он начинает звучать (без озвучки — сразу).
 """
 import logging
 import queue
@@ -16,6 +17,7 @@ from .wake import parse_yes_no, split_wake
 log = logging.getLogger("kiku.session")
 
 IDLE, LISTENING, THINKING, SPEAKING = "idle", "listening", "thinking", "speaking"
+MIN_PHRASE_SEC = 0.25   # короче — это щелчок или шум, а не слово
 
 
 def _noop(*a, **k):
@@ -43,7 +45,7 @@ class VoiceSession:
         self.window = float(self.cfg.wake.conversation_window_sec)
         self.sr = int(self.cfg.audio.sample_rate)
         if tts is not None:
-            tts.on_play_start = lambda: self.hooks.state(SPEAKING)
+            tts.on_play_start = self._on_play_start
             tts.on_play_end = lambda: self.hooks.state(THINKING if self._busy else IDLE)
         app.ctx.confirm = self._confirm
 
@@ -61,9 +63,14 @@ class VoiceSession:
 
     # ---------- речь ----------
     def say(self, text: str) -> None:
-        self.hooks.answer(text)
         if self.tts:
-            self.tts.speak(text)
+            self.tts.speak(text)        # текст появится в окне, когда начнёт звучать (_on_play_start)
+        else:
+            self.hooks.answer(text)
+
+    def _on_play_start(self, text: str) -> None:
+        self.hooks.answer(text)
+        self.hooks.state(SPEAKING)
 
     def _wait_speech(self) -> None:
         if self.tts:
@@ -154,18 +161,19 @@ class VoiceSession:
             if audio is None:
                 self.hooks.state(IDLE)
                 continue
-            if audio.size < 0.4 * self.sr:
+            if audio.size < MIN_PHRASE_SEC * self.sr:
                 self.hooks.state(IDLE)
                 continue
             t0 = time.time()
             text = self.asr.transcribe(audio)
             t_asr = time.time() - t0
+            log.info("распознано за %.1f с (звук %.1f с): %r", t_asr, audio.size / self.sr, text)
             if not text:
                 self.hooks.state(IDLE)
                 continue
 
             woke, cleaned = split_wake(text, list(self.cfg.wake.words), float(self.cfg.wake.fuzzy_ratio))
-            addressed = woke or time.time() <= self.active_until
+            addressed = woke or (self.window > 0 and time.time() <= self.active_until)
             self.hooks.heard(text, addressed)
             if not addressed:
                 self.hooks.state(IDLE)

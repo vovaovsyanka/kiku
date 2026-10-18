@@ -13,7 +13,6 @@
 а дословный текст записи — в voices/kiku_ref.txt.
 """
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -45,15 +44,15 @@ def main() -> None:
     import torch
     from qwen_tts import Qwen3TTSModel
 
-    print(f"Загружаю {cfg.tts.design_repo} на {args.device}…")
+    print(f"Загружаю {cfg.tts.qwen.design_repo} на {args.device}…")
     model = Qwen3TTSModel.from_pretrained(
-        cfg.tts.design_repo, device_map=args.device, dtype=getattr(torch, args.dtype))
+        cfg.tts.qwen.design_repo, device_map=args.device, dtype=getattr(torch, args.dtype))
     print("Генерирую референсный голос…")
     with torch.inference_mode():
         wavs, sr = model.generate_voice_design(text=args.text, language=cfg.tts.language, instruct=args.instruct)
 
-    wav_path = resolve_path(cfg.tts.ref_audio)
-    txt_path = resolve_path(cfg.tts.ref_text_file)
+    wav_path = resolve_path(cfg.tts.qwen.ref_audio)
+    txt_path = resolve_path(cfg.tts.qwen.ref_text_file)
     wav_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(wav_path), wavs[0], sr)
     txt_path.write_text(args.text, encoding="utf-8")

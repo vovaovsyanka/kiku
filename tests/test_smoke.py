@@ -431,6 +431,8 @@ class GuiSmokeTests(unittest.TestCase):
                        ("state", "thinking"), ("answer", "Здравствуйте."), ("state", "speaking"), ("status", "⚙ x"),
                        ("heard", "шум", False), ("error", "ошибка")]:
                 win.handle(ev)
+            win.show_help()
+            win.toggle_fullscreen()
             win._tick()
             self.assertEqual(win.pose, "speaking")
             self.assertTrue(win.ready)
@@ -466,6 +468,219 @@ class AssetsAndLauncherTests(unittest.TestCase):
             custom.write_text("")
             (root / "launcher.txt").write_text(str(custom), encoding="utf-8")
             self.assertEqual(mod.find_pythonw(root), custom)
+
+
+class DictCache:
+    def __init__(self):
+        self.d = {}
+
+    def get(self, text):
+        return self.d.get(text)
+
+    def put(self, text, wav, sr):
+        self.d[text] = (wav, sr)
+
+
+class SpeechPipelineTests(unittest.TestCase):
+    SR = 1000
+
+    def make(self, cache=None, rtf=2.5):
+        from kiku.voice.speech import SpeechPipeline
+        self.synth_calls, self.played, self.events = [], [], []
+
+        def synth(text):
+            self.synth_calls.append(text)
+            time.sleep(0.01)
+            return np.full(int(len(text) * 0.07 * self.SR), 0.1, dtype=np.float32), self.SR
+
+        def play(wav, sr):
+            self.played.append(len(wav) / sr)
+            time.sleep(0.01)
+
+        return SpeechPipeline(synth, play, split_chunks, chunk_chars=40, cache=cache, initial_rtf=rtf,
+                              on_start=lambda text: self.events.append(("start", text)),
+                              on_end=lambda: self.events.append("end"))
+
+    TEXT = "Первое предложение звучит так. Второе предложение звучит иначе. Третье предложение последнее."
+
+    def test_all_text_is_spoken_in_order(self):
+        pipe = self.make()
+        pipe.submit(self.TEXT)
+        pipe.wait()
+        self.assertEqual(" ".join(self.synth_calls), self.TEXT)          # озвучен ВЕСЬ текст, в том же порядке
+        self.assertAlmostEqual(sum(self.played), sum(len(c) * 0.07 for c in self.synth_calls) + 0.08 * (len(self.synth_calls) - 1),
+                               delta=0.15)
+        self.assertEqual(self.events, [("start", self.TEXT), "end"])      # одно «началась»/«закончилась» на реплику
+
+    def test_start_buffer_depends_on_rtf(self):
+        from kiku.voice.speech import _Utterance
+        fast, slow = self.make(rtf=0.5), self.make(rtf=2.5)
+        st = _Utterance(["x" * 100, "y" * 100])
+        self.assertEqual(fast._need_buffer(st), 0.0)                       # быстрее реального времени — играем сразу
+        need = slow._need_buffer(st)
+        total = 200 * slow.spc
+        self.assertTrue(0 < need < total)                                  # медленнее — копим долю (RTF-1)/RTF, но не всё
+
+    def test_cache_skips_synthesis(self):
+        pipe = self.make(cache=DictCache())
+        pipe.submit("Короткая фраза.")
+        pipe.wait()
+        n = len(self.synth_calls)
+        pipe.submit("Короткая фраза.")
+        pipe.wait()
+        self.assertEqual(len(self.synth_calls), n)                         # второй раз — из кэша
+        self.assertEqual(len(self.played), 2)
+        self.assertEqual(self.events, [("start", "Короткая фраза."), "end"] * 2)   # из кэша тоже «началась»/«закончилась»
+
+    def test_synth_failure_still_shows_text(self):
+        """Озвучка сломалась — текст всё равно должен дойти до хозяина."""
+        from kiku.voice.speech import SpeechPipeline
+        events = []
+
+        def broken(_text):
+            raise RuntimeError("нет голоса")
+        pipe = SpeechPipeline(broken, lambda w, sr: None, split_chunks, on_start=lambda t: events.append(("start", t)),
+                              on_end=lambda: events.append("end"))
+        pipe.submit("Привет, хозяин.")
+        pipe.wait()
+        self.assertEqual(events, [("start", "Привет, хозяин."), "end"])
+
+    def test_stop_drops_queue(self):
+        pipe = self.make()
+        for _ in range(5):
+            pipe.submit(self.TEXT)
+        pipe.stop()
+        pipe.wait()
+        self.assertLess(len(self.synth_calls), 15)
+
+
+class RussianTextTests(unittest.TestCase):
+    def test_numbers(self):
+        from kiku.voice.ru_text import number_words
+        self.assertEqual(number_words(0), "ноль")
+        self.assertEqual(number_words(21), "двадцать один")
+        self.assertEqual(number_words(2, feminine=True), "две")
+        self.assertEqual(number_words(1001), "одна тысяча один")
+        self.assertEqual(number_words(2026), "две тысячи двадцать шесть")
+        self.assertEqual(number_words(115000), "сто пятнадцать тысяч")
+
+    def test_speakable(self):
+        from kiku.voice.ru_text import speakable
+        self.assertEqual(speakable("в 14:30"), "в четырнадцать часов тридцать минут")
+        self.assertEqual(speakable("9:05"), "девять часов пять минут")
+        self.assertEqual(speakable("12:00"), "двенадцать часов ровно")
+        self.assertEqual(speakable("19 октября"), "девятнадцатое октября")
+        self.assertEqual(speakable("срок 2026-10-21"), "срок двадцать первое октября")
+        self.assertEqual(speakable("3 задачи"), "три задачи")
+        self.assertEqual(speakable("Без цифр."), "Без цифр.")
+
+    def test_silero_prepare_removes_unreadable(self):
+        from kiku.voice.engines import SileroEngine
+        engine = SileroEngine.__new__(SileroEngine)       # без загрузки модели
+        engine.pronounce = {"counter-strike": "Каунтер Страйк"}
+        self.assertEqual(engine.prepare("Запускаю Counter-Strike 😊 в 14:30!"),
+                         "Запускаю Каунтер Страйк в четырнадцать часов тридцать минут!")
+        self.assertEqual(engine.prepare("Открываю *папку*\nготово"), "Открываю папку . готово")
+
+
+class WakeAndAsrTests(unittest.TestCase):
+    def test_name_alone_and_variants(self):
+        words = list(load_config().wake.words)
+        self.assertEqual(split_wake("Кику.", words), (True, ""))
+        self.assertEqual(split_wake("Кико, привет", words), (True, "привет"))
+        self.assertTrue(split_wake("Ку-ку!", words)[0])
+
+    def test_prompt_echo_filter_keeps_real_commands(self):
+        from kiku.voice.asr import echoes_prompt
+        prompt = load_config().asr.initial_prompt
+        self.assertFalse(echoes_prompt("Кику", prompt))                      # одно имя — настоящая реплика
+        self.assertFalse(echoes_prompt("Какие у меня задачи?", prompt))
+        self.assertTrue(echoes_prompt(prompt, prompt))                       # а вот пересказ всей подсказки — шум
+        self.assertTrue(echoes_prompt("Кику, открой папку «Загрузки». Создай файл.", prompt))
+
+
+class HelpTests(unittest.TestCase):
+    def test_help_lists_skills_and_apps(self):
+        from kiku.ui.skills import help_sections
+        cfg = load_config()
+        sections = dict(help_sections(cfg))
+        self.assertIn("Чего пока не умею", sections)
+        self.assertTrue(any("Counter-Strike" in line for line in sections["Приложения"]))
+        self.assertTrue(any(line.startswith("«") for line in sections["Звук и музыка"]))
+        cfg.wake.conversation_window_sec = 0
+        self.assertTrue(any("в каждой команде" in line for line in dict(help_sections(cfg))["Как со мной говорить"]))
+
+
+class FakeTTS:
+    """Озвучка-заглушка: «играет» реплику и сообщает интерфейсу, что она началась/закончилась."""
+    def __init__(self):
+        self.on_play_start = self.on_play_end = None
+        self.spoken = []
+
+    def speak(self, text):
+        self.spoken.append(text)
+        self.on_play_start(text)
+        self.on_play_end()
+
+    def wait(self):
+        pass
+
+
+class TextAfterSpeechTests(unittest.TestCase):
+    def test_answer_shown_when_speech_starts(self):
+        from kiku.voice.session import Hooks, VoiceSession
+        with temp_app(win=FakeWin()) as (tmp, app):
+            app.ctx.dry_run = True
+            events = []
+            tts = FakeTTS()
+            hooks = Hooks(state=lambda s: events.append(("state", s)), answer=lambda t: events.append(("answer", t)))
+            session = VoiceSession(app, None, None, tts, hooks)
+            session.say("Привет, хозяин.")
+            self.assertEqual(tts.spoken, ["Привет, хозяин."])
+            self.assertEqual(events[:2], [("answer", "Привет, хозяин."), ("state", "speaking")])
+
+    def test_without_tts_answer_is_immediate(self):
+        from kiku.voice.session import Hooks, VoiceSession
+        with temp_app(win=FakeWin()) as (tmp, app):
+            shown = []
+            session = VoiceSession(app, None, None, None, Hooks(answer=shown.append))
+            session.say("Без голоса.")
+            self.assertEqual(shown, ["Без голоса."])
+
+
+class MiscTests(unittest.TestCase):
+    def test_history_matches_what_model_saw(self):
+        """Кэш промпта llama.cpp работает по общему началу: история хранит ровно то, что видела модель."""
+        llm = FakeLLM([{"actions": [], "say": "Привет, хозяин."}, {"actions": [], "say": "Всё хорошо."}])
+        with temp_app(llm) as (tmp, app):
+            app.agent.respond("привет как жизнь")
+            app.agent.respond("как у тебя дела")
+            first, second = llm.calls
+            self.assertEqual(second[:len(first)], first)                   # второй запрос начинается с первого целиком
+            self.assertIn("Привет, хозяин.", second[2]["content"])
+
+    def test_devices_report(self):
+        from kiku import devices
+
+        class Fake:
+            def device_info(self):
+                return "cuda:0"
+
+            def device_label(self):
+                return "cuda:0"
+        lines = devices.report(Fake(), None, Fake())
+        self.assertEqual(lines[0], "Распознавание речи: cuda:0")
+        self.assertIn("не загружена", lines[1])
+        self.assertIn("озвучка: нет", devices.summary(Fake(), None, Fake()))
+
+    def test_cuda_init_returns_text(self):
+        from kiku.cuda_init import init_cuda_first
+        self.assertIsInstance(init_cuda_first(), str)
+
+    def test_full_speech_by_default(self):
+        long = "Это длинное предложение номер один. " * 10
+        self.assertEqual(shorten_for_speech(long, 0), " ".join(long.split()))
+        self.assertEqual(load_config().tts.max_spoken_chars, 0)
 
 
 if __name__ == "__main__":

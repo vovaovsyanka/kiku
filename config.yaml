@@ -84,7 +84,7 @@ llm:
   temperature: 0.3
   max_tokens: 200
   max_steps: 5             # максимум вызовов инструментов за одну реплику
-  history_turns: 8         # сколько последних обменов репликами помнить в диалоге
+  history_turns: 6         # сколько последних обменов репликами помнить в диалоге
 
 asr:
   enabled: true
@@ -103,30 +103,57 @@ audio:
   max_utterance_sec: 20
 
 wake:
-  words: ["кику", "кики", "кеку", "куку", "kiku"]
+  words: ["кику", "кики", "кика", "кико", "кеку", "куку", "тику", "kiku"]
   fuzzy_ratio: 0.75
   conversation_window_sec: 25   # после ответа Кику ещё столько секунд слушает без имени; 0 = имя нужно в КАЖДОЙ команде
 
 tts:
   enabled: true
-  # clone  — клонирование голоса из voices/kiku_ref.wav (рекомендуется; см. scripts/design_voice.py)
-  # custom — готовый тембр из Qwen3-TTS-0.6B-CustomVoice (без подготовки, но тембры не родные для русского)
-  mode: "clone"
-  base_repo: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-  custom_repo: "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
-  design_repo: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"   # нужен один раз, чтобы придумать голос
-  speaker: "Serena"          # для mode: custom
-  language: "Russian"
-  device: "cuda:0"           # "cpu" если не хватает VRAM (будет медленно)
-  dtype: "bfloat16"
-  attn_implementation: "sdpa"   # "flash_attention_2" на Windows обычно недоступен
-  max_spoken_chars: 160       # озвучивается только начало ответа (целые предложения); на экране показывается весь текст
+  # silero — быстрый (на процессоре в десятки раз быстрее реального времени), родной русский, готовые голоса.
+  # qwen   — клонирует любой голос из voices/kiku_ref.wav, но на слабой видеокарте медленный (секунда звука ≈ 2.5 с).
+  engine: "silero"
+  language: "Russian"         # для qwen
+  max_spoken_chars: 0         # 0 = озвучивать ВЕСЬ ответ; число N>0 = озвучивать только первые ~N символов (целые предложения)
   prewarm: true               # в простое заранее озвучивать типовые фразы, чтобы они потом звучали мгновенно
-  chunk_chars: 400            # реплика озвучивается одним куском; длиннее — режется на крупные части
+  chunk_chars: 120            # реплика режется на куски по предложениям
   cache: true                 # кэш готовых фраз на диске: повторяющиеся реплики звучат мгновенно
   cache_dir: "data/tts_cache"
-  ref_audio: "voices/kiku_ref.wav"
-  ref_text_file: "voices/kiku_ref.txt"
+
+  silero:
+    model: "v5_ru"            # файл models/silero/<model>.pt (python scripts/download_models.py --only tts)
+    model_dir: "models/silero"
+    speaker: "xenia"          # xenia | baya | kseniya (женские), aidar | eugene (мужские).
+                              # Послушать все: python scripts/bench_tts.py --samples  (файлы в data/tts_samples)
+    pitch: "medium"           # тон: x-low | low | medium | high | x-high. «Милее» — high
+    rate: "medium"            # темп: x-slow | slow | medium | fast | x-fast
+    sample_rate: 48000        # 8000 | 24000 | 48000
+    device: "cpu"             # cpu | cuda:0 (видеопамять занята Whisper; на CPU Silero и так мгновенный)
+    threads: 4
+
+  qwen:
+    # clone  — клонирование голоса из voices/kiku_ref.wav (см. scripts/design_voice.py)
+    # custom — готовый тембр из Qwen3-TTS-0.6B-CustomVoice
+    mode: "clone"
+    base_repo: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    custom_repo: "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    design_repo: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"   # нужен один раз, чтобы придумать голос
+    speaker: "Serena"         # для mode: custom
+    device: "cuda:0"          # "cpu" если не хватает VRAM (будет медленно)
+    dtype: "bfloat16"         # ТОЛЬКО bfloat16: в float16 Qwen3-TTS падает на этой видеокарте (CUDA assert)
+    attn_implementation: "sdpa"   # "flash_attention_2" на Windows обычно недоступен
+    ref_audio: "voices/kiku_ref.wav"
+    ref_text_file: "voices/kiku_ref.txt"
+
+  # Как читать латинские названия (Silero латиницу не читает). Ключ ищется в тексте без учёта регистра.
+  pronounce:
+    "Counter-Strike": "Каунтер Страйк"
+    "Visual Studio Code": "Визуал Студио Код"
+    "Visual Studio": "Визуал Студио"
+    "Google Chrome": "Гугл Хром"
+    "Telegram": "Телеграм"
+    "Discord": "Дискорд"
+    "Steam": "Стим"
+    "Chrome": "Хром"
 
 memory:
   db_path: "data/kiku.db"
@@ -134,6 +161,7 @@ memory:
   max_facts_in_prompt: 30
 
 gui:
-  width: 560
+  start_maximized: true    # открываться на весь экран (F11 — полноэкранный режим, Esc — выйти из него)
+  width: 560               # размер окна, если start_maximized: false
   height: 900
   always_on_top: false

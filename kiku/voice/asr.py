@@ -25,11 +25,19 @@ class WhisperASR:
                 device = "cpu"
         if ctype == "auto":
             ctype = "int8_float16" if device == "cuda" else "int8"
+        self.device, self.compute_type = device, ctype
         log.info("Загружаю ASR %s (%s, %s)", cfg.model, device, ctype)
         self.model = WhisperModel(
             cfg.model, device=device, compute_type=ctype,
             local_files_only=os.environ.get("HF_HUB_OFFLINE") == "1",
         )
+
+    def device_info(self) -> str:
+        real = getattr(getattr(self.model, "model", None), "device", None)   # ctranslate2: реальное устройство
+        return f"{real or self.device} ({self.compute_type})"
+
+    def device_label(self) -> str:
+        return str(getattr(getattr(self.model, "model", None), "device", None) or self.device)
 
     def transcribe(self, audio: np.ndarray) -> str:
         segments, _ = self.model.transcribe(
@@ -48,10 +56,19 @@ class WhisperASR:
                 continue
             parts.append(s.text.strip())
         text = " ".join(parts).strip()
-        low = text.lower()
-        if not text or any(j in low for j in _JUNK):
+        if not text or any(j in text.lower() for j in _JUNK):
             return ""
-        prompt = (self.cfg.initial_prompt or "").lower()
-        if prompt and re.sub(r"\W+", "", low) in re.sub(r"\W+", "", prompt):
-            return ""  # модель «пересказала» подсказку вместо речи
+        if echoes_prompt(text, self.cfg.initial_prompt or ""):
+            return ""
         return text
+
+
+def _squash(s: str) -> str:
+    return re.sub(r"\W+", "", s.lower().replace("ё", "е"))
+
+
+def echoes_prompt(text: str, prompt: str) -> bool:
+    """Whisper на шуме иногда «пересказывает» подсказку. Отбрасываем только длинный кусок подсказки:
+    короткое «Кику» или «Какие у меня задачи?» — это настоящие реплики, они тоже есть в подсказке."""
+    t, p = _squash(text), _squash(prompt)
+    return bool(p) and len(t) >= 0.5 * len(p) and t in p

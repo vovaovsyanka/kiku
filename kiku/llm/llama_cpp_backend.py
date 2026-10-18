@@ -43,6 +43,18 @@ class LlamaCppBackend:
             verbose=False,
         )
 
+    def device_info(self) -> str:
+        import llama_cpp
+        n = int(self.cfg.n_gpu_layers)
+        if n > 0 and llama_cpp.llama_supports_gpu_offload():
+            return f"GPU: {n} слоёв выгружено, остальное на CPU"
+        why = "сборка llama-cpp-python без CUDA" if not llama_cpp.llama_supports_gpu_offload() else "n_gpu_layers: 0"
+        return f"CPU ({why})"
+
+    def device_label(self) -> str:
+        import llama_cpp
+        return "GPU" if int(self.cfg.n_gpu_layers) > 0 and llama_cpp.llama_supports_gpu_offload() else "CPU"
+
     def warmup(self, messages) -> None:
         """Прогрев кэша: модель заранее «прочитывает» системный промпт (без генерации ответа)."""
         t0 = time.time()
