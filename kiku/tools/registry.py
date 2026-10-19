@@ -38,6 +38,8 @@ class Tool:
     fn: Callable
     reads: bool = False       # True: результат нужен модели, чтобы ответить (поиск, списки, время)
     untrusted: bool = False   # True: результат содержит чужой текст (файл) — после него менять систему нельзя
+    harmless: bool = False    # True: безобидное действие (например, положить текст в буфер) — разрешено даже после чтения чужого текста
+    hidden: bool = False      # True: модель о нём не знает (не в каталоге), вызывать может только быстрый путь (router)
 
 
 def _coerce(value, hint):
@@ -63,9 +65,10 @@ class ToolRegistry:
         self.tools: dict[str, Tool] = {}
         self.audit = audit
 
-    def tool(self, name: str, description: str, reads: bool = False, untrusted: bool = False):
+    def tool(self, name: str, description: str, reads: bool = False, untrusted: bool = False, harmless: bool = False,
+             hidden: bool = False):
         def deco(fn):
-            self.tools[name] = Tool(name, description, fn, reads, untrusted)
+            self.tools[name] = Tool(name, description, fn, reads, untrusted, harmless, hidden)
             return fn
         return deco
 
@@ -77,12 +80,20 @@ class ToolRegistry:
         t = self.tools.get(name)
         return bool(t and t.reads)
 
+    def allowed_when_tainted(self, name: str) -> bool:
+        """После чтения чужого текста разрешены только читающие и безобидные инструменты."""
+        t = self.tools.get(name)
+        return bool(t and (t.reads or t.harmless))
+
     def names(self) -> list[str]:
-        return list(self.tools)
+        """Инструменты, которые видит языковая модель (скрытые — только для быстрого пути)."""
+        return [n for n, t in self.tools.items() if not t.hidden]
 
     def catalog(self) -> str:
         lines = []
         for t in self.tools.values():
+            if t.hidden:
+                continue
             sig = inspect.signature(t.fn)
             hints = typing.get_type_hints(t.fn)
             parts = []

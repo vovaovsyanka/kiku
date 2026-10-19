@@ -3,6 +3,7 @@
     python scripts/bench_llm.py                                   # модель из config.yaml
     python scripts/bench_llm.py --repo unsloth/Qwen3-4B-Instruct-2507-GGUF --pattern "*Q4_K_M*.gguf"
     python scripts/bench_llm.py --threads 6 --gpu-layers 0
+    python scripts/bench_llm.py --gpu-layers 99 --cpu-moe 48 --kv-q8     # внимание на GPU, эксперты MoE в ОЗУ
 Модель для --repo сначала скачайте: python scripts/download_models.py --llm-repo ...
 """
 import argparse
@@ -17,7 +18,8 @@ from kiku.env import setup_environment  # noqa: E402
 setup_environment(offline=True)
 
 from kiku.config import load_config  # noqa: E402
-from kiku.llm.llama_cpp_backend import find_gguf  # noqa: E402
+from kiku.cuda_init import init_cuda_first  # noqa: E402
+from kiku.llm.llama_cpp_backend import find_gguf, load_llama  # noqa: E402
 
 
 def main() -> None:
@@ -26,6 +28,8 @@ def main() -> None:
     ap.add_argument("--pattern")
     ap.add_argument("--threads", type=int)
     ap.add_argument("--gpu-layers", type=int)
+    ap.add_argument("--cpu-moe", type=int, default=0, help="эксперты стольких первых слоёв оставить в ОЗУ (для MoE)")
+    ap.add_argument("--kv-q8", action="store_true", help="KV-кэш в 8 бит (вдвое меньше видеопамяти)")
     ap.add_argument("--ctx", type=int, default=4096)
     args = ap.parse_args()
     cfg = load_config()
@@ -34,11 +38,11 @@ def main() -> None:
     threads = args.threads if args.threads is not None else int(cfg.llm.n_threads)
     gpu = args.gpu_layers if args.gpu_layers is not None else int(cfg.llm.n_gpu_layers)
 
-    from llama_cpp import Llama
+    print("CUDA:", init_cuda_first())          # torch раньше llama.cpp: он приносит CUDA-библиотеки
     path = find_gguf(repo, pattern)
-    print(f"Модель: {repo}\nПотоки: {threads or 'авто'}, слоёв на GPU: {gpu}\nЗагрузка…")
+    print(f"Модель: {repo}\nПотоки: {threads or 'авто'}, слоёв на GPU: {gpu}, экспертов в ОЗУ: {args.cpu_moe}\nЗагрузка…")
     t0 = time.time()
-    llm = Llama(model_path=path, n_ctx=args.ctx, n_gpu_layers=gpu, n_threads=(threads or None), verbose=False)
+    llm = load_llama(path, args.ctx, gpu, threads or None, n_cpu_moe=args.cpu_moe, kv_q8=args.kv_q8)
     print(f"Загружена за {time.time() - t0:.1f} с\n")
 
     filler = "Кику — домашняя помощница-горничная. Она открывает папки, запускает приложения и помнит задачи. " * 22

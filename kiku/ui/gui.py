@@ -266,6 +266,9 @@ class KikuWindow:
                 self.heard.config(text=f"Вы: {text}", fg=INK)
             else:
                 self.heard.config(text=f"(не мне) {text}", fg=MUTED)
+        elif kind == "notice":                   # Кику заговорила сама: напоминание, сводка, забота о перерыве
+            self.set_answer("")
+            self.heard.config(text=ev[1], fg=ACCENT)
         elif kind == "answer":
             self.set_answer(ev[1], append=True)
         elif kind in ("status", "loading"):
@@ -393,6 +396,7 @@ def run_gui(cfg) -> int:
             hooks = Hooks(
                 state=lambda s: events.put(("state", s)),
                 heard=lambda t, a: events.put(("heard", t, a)),
+                notice=lambda title: events.put(("notice", title)),
                 answer=lambda t: events.put(("answer", t)),
                 status=lambda s: log.info("тайминг: %s", s),
                 tool=lambda tool, args, res: events.put(

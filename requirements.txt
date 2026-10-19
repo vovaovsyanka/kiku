@@ -1,4 +1,5 @@
 # --- ядро (текстовый режим) ---
 pyyaml>=6.0
 huggingface_hub>=0.24
-llama-cpp-python>=0.3.2
+llama-cpp-python>=0.3.2   # для видеокарты — CUDA-сборка, см. README
+psutil>=5.9               # диагностика ПК («что тормозит?»)

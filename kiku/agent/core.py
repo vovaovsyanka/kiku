@@ -163,8 +163,8 @@ class Agent:
                 if seen[key] > 2:         # один повтор допустим (например, поиск после индексации), третий — цикл
                     looped = True
                     break
-                if tainted and not self.registry.is_read(call.tool):
-                    res = {"ok": False, "error": "заблокировано: после чтения файла менять систему нельзя — "
+                if tainted and not self.registry.allowed_when_tainted(call.tool):
+                    res = {"ok": False, "error": "заблокировано: после чтения чужого текста (файл, буфер обмена) менять систему нельзя — "
                                                  "можно только отвечать хозяину или читать дальше"}
                 else:
                     res = self.registry.call(call.tool, call.args)
