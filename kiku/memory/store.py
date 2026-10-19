@@ -1,9 +1,11 @@
 """Локальная память Кику: SQLite + полнотекстовый поиск FTS5.
 
-Три сущности:
-  * notes — факты о хозяине и заметки (kind = 'fact' | 'note')
+Сущности:
+  * notes — факты о хозяине, заметки и записи дневника (kind = 'fact' | 'note' | 'diary')
   * tasks — задачи с необязательным сроком
-  * files — индекс имён файлов (содержимое файлов НЕ читается и НЕ хранится)
+  * reminders — напоминания и таймеры (срабатывают по времени, переживают перезапуск)
+  * files — индекс имён файлов; docs — текст файлов, проиндексированных по просьбе хозяина
+  * kv — мелкие служебные значения (например, дата последней утренней сводки)
 """
 import os
 import re
@@ -20,6 +22,10 @@ _ENDINGS = re.compile(
 _STOP = {"в", "на", "по", "и", "с", "к", "у", "о", "от", "из", "за", "для", "мой", "моя",
          "мои", "моё", "где", "что", "как", "это", "файл", "лежит", "найди", "покажи"}
 
+TEXT_EXT = {".txt", ".md", ".log", ".csv", ".json", ".yaml", ".yml", ".ini", ".toml", ".xml", ".cfg",
+            ".py", ".html", ".htm", ".tex", ".rst"}
+MAX_DOC_BYTES = 300_000
+MAX_DOC_CHARS = 20_000      # столько текста одного файла попадает в индекс
 SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "$recycle.bin",
              "appdata", "system volume information", ".cache", ".idea", ".vscode"}
 
@@ -78,11 +84,23 @@ class MemoryStore:
                 ext TEXT, size INTEGER, mtime TEXT, root TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_files_root ON files(root);
             CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(name, dirs, {tok});
+
+            CREATE TABLE IF NOT EXISTS reminders(
+                id INTEGER PRIMARY KEY, text TEXT NOT NULL, due_ts REAL NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'reminder', status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_ts);
+
+            CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+            CREATE TABLE IF NOT EXISTS docs(
+                id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mtime REAL, root TEXT NOT NULL);
+            CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(name, content, {tok});
             """)
 
     # ---------------- заметки и факты ----------------
     def add_note(self, text: str, kind: str = "note") -> int:
-        kind = kind if kind in ("fact", "note") else "note"
+        kind = kind if kind in ("fact", "note", "diary") else "note"
         with self._lock, self.db:
             cur = self.db.execute("INSERT INTO notes(text, kind, created_at) VALUES(?,?,?)",
                                   (text.strip(), kind, _now()))
@@ -120,6 +138,52 @@ class MemoryStore:
             cur = self.db.execute("DELETE FROM notes WHERE id=?", (note_id,))
             self.db.execute("DELETE FROM notes_fts WHERE rowid=?", (note_id,))
         return cur.rowcount > 0
+
+    def list_diary(self, start: str, end: str, limit: int = 60) -> list[dict]:
+        """Записи дневника с created_at в [start, end) (строки «ГГГГ-ММ-ДД ЧЧ:ММ»)."""
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT id, text, created_at FROM notes WHERE kind='diary' AND created_at >= ? AND created_at < ? "
+                "ORDER BY created_at LIMIT ?", (start, end, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---------------- напоминания и таймеры ----------------
+    def add_reminder(self, text: str, due_ts: float, kind: str = "reminder") -> int:
+        with self._lock, self.db:
+            cur = self.db.execute("INSERT INTO reminders(text, due_ts, kind, created_at) VALUES(?,?,?,?)",
+                                  (text.strip(), due_ts, kind, _now()))
+        return cur.lastrowid
+
+    def list_reminders(self) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM reminders WHERE status='pending' ORDER BY due_ts").fetchall()
+        return [dict(r) for r in rows]
+
+    def due_reminders(self, now_ts: float) -> list[dict]:
+        """Сработавшие напоминания; сразу помечаются выполненными (повторно не вернутся)."""
+        with self._lock, self.db:
+            rows = self.db.execute("SELECT * FROM reminders WHERE status='pending' AND due_ts <= ? ORDER BY due_ts",
+                                   (now_ts,)).fetchall()
+            self.db.executemany("UPDATE reminders SET status='done' WHERE id=?", [(r["id"],) for r in rows])
+        return [dict(r) for r in rows]
+
+    def cancel_reminder(self, reminder_id: int) -> dict | None:
+        with self._lock, self.db:
+            row = self.db.execute("SELECT * FROM reminders WHERE id=? AND status='pending'", (reminder_id,)).fetchone()
+            if row:
+                self.db.execute("UPDATE reminders SET status='cancelled' WHERE id=?", (reminder_id,))
+        return dict(row) if row else None
+
+    # ---------------- служебные значения ----------------
+    def kv_get(self, key: str, default: str | None = None) -> str | None:
+        with self._lock:
+            row = self.db.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def kv_set(self, key: str, value: str) -> None:
+        with self._lock, self.db:
+            self.db.execute("INSERT INTO kv(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (key, value))
 
     # ---------------- задачи ----------------
     def add_task(self, title: str, due: str | None = None, details: str | None = None) -> int:
@@ -200,7 +264,68 @@ class MemoryStore:
                     return rows
         return []
 
+    # ---------------- содержимое текстовых файлов ----------------
+    @staticmethod
+    def _read_text(path: str) -> str | None:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read(MAX_DOC_BYTES)
+        except OSError:
+            return None
+        try:
+            return raw.decode("utf-8-sig")[:MAX_DOC_CHARS]
+        except UnicodeDecodeError:
+            return raw.decode("cp1251", errors="replace")[:MAX_DOC_CHARS]
+
+    def index_contents(self, root: Path, max_files: int = 3000) -> int:
+        """Запоминает ТЕКСТ небольших текстовых файлов папки (txt, md, csv…), чтобы искать по словам из содержимого."""
+        root = Path(root)
+        rows = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS and not d.startswith(".")]
+            for fn in filenames:
+                if len(rows) >= max_files:
+                    break
+                full = os.path.join(dirpath, fn)
+                if Path(fn).suffix.lower() not in TEXT_EXT:
+                    continue
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                if st.st_size > MAX_DOC_BYTES * 3:
+                    continue
+                text = self._read_text(full)
+                if text and text.strip():
+                    rows.append((full, fn, st.st_mtime, text))
+            if len(rows) >= max_files:
+                break
+        with self._lock, self.db:
+            old = [r["id"] for r in self.db.execute("SELECT id FROM docs WHERE root=?", (str(root),))]
+            self.db.executemany("DELETE FROM docs_fts WHERE rowid=?", [(i,) for i in old])
+            self.db.execute("DELETE FROM docs WHERE root=?", (str(root),))
+            for path, name, mtime, text in rows:
+                cur = self.db.execute("INSERT OR REPLACE INTO docs(path,name,mtime,root) VALUES(?,?,?,?)",
+                                      (path, name, mtime, str(root)))
+                self.db.execute("INSERT INTO docs_fts(rowid, name, content) VALUES(?,?,?)", (cur.lastrowid, name, text))
+        return len(rows)
+
+    def search_contents(self, query: str, limit: int = 5) -> list[dict]:
+        with self._lock:
+            for mode in ("AND", "OR"):
+                q = fts_query(query, mode)
+                if not q:
+                    return []
+                rows = self.db.execute(
+                    "SELECT d.path, d.name, snippet(docs_fts, 1, '[', ']', ' … ', 24) AS snippet FROM docs_fts "
+                    "JOIN docs d ON d.id = docs_fts.rowid WHERE docs_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (q, limit * 3)).fetchall()
+                rows = [dict(r) for r in rows if os.path.exists(r["path"])][:limit]
+                if rows:
+                    return rows
+        return []
+
     def stats(self) -> dict:
         with self._lock:
             c = lambda t: self.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            return {"notes": c("notes"), "tasks": c("tasks"), "files": c("files")}
+            return {"notes": c("notes"), "tasks": c("tasks"), "files": c("files"), "docs": c("docs")}

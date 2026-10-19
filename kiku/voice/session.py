@@ -4,6 +4,7 @@
 Полудуплекс: пока Кику говорит, микрофон закрыт (так она не слышит саму себя).
 Команды можно вводить и текстом (submit) — они не требуют имени.
 Текст ответа показывается в тот момент, когда он начинает звучать (без озвучки — сразу).
+Кику может заговорить сама: напоминания, таймеры и забота о перерывах приходят через announce().
 """
 import logging
 import queue
@@ -12,6 +13,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from ..proactive import BreakReminder, Proactive, briefing_text, first_briefing_today
+from ..scheduler import Scheduler
 from .wake import parse_yes_no, split_wake
 
 log = logging.getLogger("kiku.session")
@@ -31,14 +34,17 @@ class Hooks:
     answer: Callable[[str], None] = _noop                 # текст ответа
     status: Callable[[str], None] = _noop                 # служебные сообщения (тайминги)
     tool: Callable[[str, dict, dict], None] = _noop       # вызов инструмента
+    notice: Callable[[str], None] = _noop                 # Кику заговорила сама (заголовок: «Напоминание», «Забота»…)
 
 
 class VoiceSession:
-    def __init__(self, app, asr, listener, tts=None, hooks: Hooks | None = None):
+    def __init__(self, app, asr, listener, tts=None, hooks: Hooks | None = None, background: bool = True):
+        """background=False — без планировщика напоминаний и заботы о перерывах (для тестов)."""
         self.app, self.asr, self.listener, self.tts = app, asr, listener, tts
         self.hooks = hooks or Hooks()
         self.cfg = app.cfg
         self.inbox: queue.Queue = queue.Queue()
+        self.announcements: queue.Queue = queue.Queue()     # (заголовок, текст): то, что Кику говорит сама
         self.stop_event = threading.Event()
         self.active_until = 0.0
         self._busy = False
@@ -48,6 +54,16 @@ class VoiceSession:
             tts.on_play_start = self._on_play_start
             tts.on_play_end = lambda: self.hooks.state(THINKING if self._busy else IDLE)
         app.ctx.confirm = self._confirm
+        self.background = []
+        if background:
+            owner = self.cfg.persona.owner_title
+            pro = getattr(self.cfg, "proactive", None)
+            self.background.append(Scheduler(app.memory, lambda text: self.announce(text, "Напоминание"), owner))
+            every = int(getattr(pro, "break_every_min", 0)) if pro else 0
+            if every > 0:
+                quiet = tuple(getattr(pro, "quiet_hours", (23, 7)))
+                breaks = BreakReminder(lambda text: self.announce(text, "Забота"), owner, every, quiet)
+                self.background.append(Proactive(breaks))
 
     # ---------- управление ----------
     def submit(self, text: str) -> None:
@@ -55,11 +71,17 @@ class VoiceSession:
         if text.strip():
             self.inbox.put(text.strip())
 
+    def announce(self, text: str, title: str = "Кику") -> None:
+        """Кику заговорит сама, как только освободится (можно звать из любого потока)."""
+        self.announcements.put((title, text))
+
     def stop(self) -> None:
         self.stop_event.set()
+        for worker in self.background:
+            worker.stop()
 
     def _should_break(self) -> bool:
-        return self.stop_event.is_set() or not self.inbox.empty()
+        return self.stop_event.is_set() or not self.inbox.empty() or not self.announcements.empty()
 
     # ---------- речь ----------
     def say(self, text: str) -> None:
@@ -75,6 +97,15 @@ class VoiceSession:
     def _wait_speech(self) -> None:
         if self.tts:
             self.tts.wait()
+
+    def _speak_unprompted(self, title: str, text: str) -> None:
+        self._busy = True
+        self.hooks.notice(title)
+        self.say(text)
+        self._wait_speech()
+        self._busy = False
+        self.active_until = time.time() + self.window          # можно сразу ответить без имени
+        self.hooks.state(IDLE)
 
     def prewarm_phrases(self) -> list[str]:
         owner = self.cfg.persona.owner_title
@@ -139,11 +170,24 @@ class VoiceSession:
         self.hooks.state(IDLE)
         if self.tts and bool(getattr(self.cfg.tts, "prewarm", True)):
             self.tts.prewarm(self.prewarm_phrases())
-        self.say(f"Я на месте, {owner}.")
-        self._wait_speech()
-        self.hooks.state(IDLE)
+        for worker in self.background:
+            worker.start()
+        pro = getattr(self.cfg, "proactive", None)
+        if pro and getattr(pro, "morning_briefing", False) and first_briefing_today(self.app.memory):
+            self._speak_unprompted("Сводка", briefing_text(self.cfg, self.app.memory, self.app.registry))
+        else:
+            self.say(f"Я на месте, {owner}.")
+            self._wait_speech()
+            self.hooks.state(IDLE)
 
         while not self.stop_event.is_set():
+            try:
+                title, note = self.announcements.get_nowait()
+            except queue.Empty:
+                title = note = None
+            if note is not None:
+                self._speak_unprompted(title, note)
+                continue
             try:
                 typed = self.inbox.get_nowait()
             except queue.Empty:

@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 
+from ..memory.store import TEXT_EXT
 from ..persona import now_ru
 from .registry import ToolContext, ToolError, ToolRegistry
 
@@ -99,9 +100,6 @@ def register_system_tools(reg: ToolRegistry, ctx: ToolContext) -> None:
             return dry(f"открыла бы файл {p}")
         platform_open(str(p))
         return f"открыт файл {p.name}"
-
-    TEXT_EXT = {".txt", ".md", ".log", ".csv", ".json", ".yaml", ".yml", ".ini", ".toml", ".xml", ".cfg",
-                ".py", ".html", ".htm", ".tex", ".rst"}
 
     @reg.tool("read_text_file",
               "Прочитать текстовый файл (txt, md, csv, json, py…) и вернуть начало текста. Путь — из find_files или list_folder. "

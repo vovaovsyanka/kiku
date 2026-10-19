@@ -6,8 +6,11 @@ from .agent import Agent, Router
 from .audit import AuditLog
 from .config import resolve_path
 from .memory import MemoryStore
-from .tools import (PathPolicy, ToolContext, ToolRegistry, register_memory_tools,
-                    register_system_tools, register_window_tools)
+from .proactive import briefing_text
+from .tools import (PathPolicy, ToolContext, ToolRegistry, register_clipboard_tools, register_files_tools,
+                    register_memory_tools, register_net_tools, register_pc_tools, register_reminder_tools,
+                    register_scene_tools, register_system_tools, register_window_tools)
+from .tools.scene_tools import validate_scenes
 
 log = logging.getLogger("kiku.app")
 
@@ -21,8 +24,8 @@ class App:
     memory: MemoryStore
 
 
-def build_app(cfg, llm=None, dry_run: bool | None = None, win_backend=None) -> App:
-    """llm и win_backend можно передать готовые (для тестов)."""
+def build_app(cfg, llm=None, dry_run: bool | None = None, win_backend=None, clipboard=None) -> App:
+    """llm, win_backend и clipboard можно передать готовые (для тестов)."""
     audit = AuditLog(resolve_path(cfg.memory.audit_path))
     memory = MemoryStore(resolve_path(cfg.memory.db_path))
     policy = PathPolicy(cfg)
@@ -30,11 +33,21 @@ def build_app(cfg, llm=None, dry_run: bool | None = None, win_backend=None) -> A
                       dry_run=bool(cfg.security.dry_run if dry_run is None else dry_run))
     registry = ToolRegistry(audit)
     register_system_tools(registry, ctx)
-    register_window_tools(registry, ctx, win_backend)
+    win_backend = register_window_tools(registry, ctx, win_backend)
     register_memory_tools(registry, ctx)
+    register_reminder_tools(registry, ctx)
+    register_scene_tools(registry, ctx)
+    register_pc_tools(registry, ctx)
+    register_clipboard_tools(registry, ctx, win_backend, clipboard)
+    register_files_tools(registry, ctx)
+    register_net_tools(registry, ctx)
+    for problem in validate_scenes(registry, cfg):
+        log.warning(problem)
 
     router_cfg = getattr(cfg, "router", None)
-    router = Router(registry, cfg) if (router_cfg is None or getattr(router_cfg, "enabled", True)) else None
+    router = None
+    if router_cfg is None or getattr(router_cfg, "enabled", True):
+        router = Router(registry, cfg, briefing_fn=lambda: briefing_text(cfg, memory, registry))
 
     if llm is None:
         from .llm import build_llm

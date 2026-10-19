@@ -57,6 +57,9 @@ class FakeWin:
     def press_key(self, vk):
         self.log.append(("key", vk))
 
+    def hotkey(self, *vks):
+        self.log.append(("hotkey", *vks))
+
     def lock(self):
         self.log.append(("lock",))
 
@@ -380,12 +383,13 @@ def run_session(window, texts, order, typed=()):
     log = {"heard": [], "answers": [], "states": []}
     with temp_app(win=FakeWin()) as (tmp, app):
         app.ctx.dry_run = True
+        app.cfg.proactive.morning_briefing = False
         app.cfg.wake.conversation_window_sec = window
         box = {}
         hooks = Hooks(state=log["states"].append, heard=lambda t, a: log["heard"].append((t, a)),
                       answer=log["answers"].append)
         listener = FakeListener(lambda: box["s"], order)
-        session = box["s"] = VoiceSession(app, FakeASR(texts), listener, None, hooks)
+        session = box["s"] = VoiceSession(app, FakeASR(texts), listener, None, hooks, background=False)
         for t in typed:
             session.submit(t)
         with mock.patch("kiku.voice.session.time.sleep"):
@@ -429,7 +433,7 @@ class GuiSmokeTests(unittest.TestCase):
             win._rebuild(500, 700)
             for ev in [("loading", "Загружаю…"), ("ready",), ("state", "listening"), ("heard", "Кику, привет", True),
                        ("state", "thinking"), ("answer", "Здравствуйте."), ("state", "speaking"), ("status", "⚙ x"),
-                       ("heard", "шум", False), ("error", "ошибка")]:
+                       ("heard", "шум", False), ("notice", "Напоминание"), ("error", "ошибка")]:
                 win.handle(ev)
             win.show_help()
             win.toggle_fullscreen()
@@ -634,7 +638,7 @@ class TextAfterSpeechTests(unittest.TestCase):
             events = []
             tts = FakeTTS()
             hooks = Hooks(state=lambda s: events.append(("state", s)), answer=lambda t: events.append(("answer", t)))
-            session = VoiceSession(app, None, None, tts, hooks)
+            session = VoiceSession(app, None, None, tts, hooks, background=False)
             session.say("Привет, хозяин.")
             self.assertEqual(tts.spoken, ["Привет, хозяин."])
             self.assertEqual(events[:2], [("answer", "Привет, хозяин."), ("state", "speaking")])
@@ -643,7 +647,7 @@ class TextAfterSpeechTests(unittest.TestCase):
         from kiku.voice.session import Hooks, VoiceSession
         with temp_app(win=FakeWin()) as (tmp, app):
             shown = []
-            session = VoiceSession(app, None, None, None, Hooks(answer=shown.append))
+            session = VoiceSession(app, None, None, None, Hooks(answer=shown.append), background=False)
             session.say("Без голоса.")
             self.assertEqual(shown, ["Без голоса."])
 

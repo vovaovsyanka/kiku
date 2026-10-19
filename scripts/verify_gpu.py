@@ -97,8 +97,9 @@ def check_llm():
     n = int(load_config().llm.n_gpu_layers)
     sup = llama_cpp.llama_supports_gpu_offload()
     print(f"llama-cpp-python {llama_cpp.__version__}: поддержка GPU в сборке: {sup}; n_gpu_layers в config.yaml: {n}")
-    if n > 0 and sup:
-        print("ИТОГ: часть слоёв LLM на GPU.")
+    if n != 0 and sup:
+        moe = int(getattr(load_config().llm, "n_cpu_moe", 0))
+        print(f"ИТОГ: LLM на GPU (слоёв: {'все' if n < 0 or n > 200 else n}" + (f", эксперты {moe} слоёв в ОЗУ)." if moe else ")."))
     else:
         print("ИТОГ: LLM работает на CPU" + ("" if sup else " (сборка llama-cpp-python без CUDA)") + ".")
 

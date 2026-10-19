@@ -21,7 +21,7 @@ class UnsupportedBackend:
     """Заглушка для не-Windows систем (и для тестов без бэкенда)."""
     def _no(self, *a, **k):
         raise ToolError("управление окнами и звуком работает только в Windows")
-    list_windows = show = focus = close = press_key = lock = _no
+    list_windows = show = focus = close = press_key = hotkey = lock = _no
 
 
 class Win32Backend:
@@ -110,11 +110,19 @@ class Win32Backend:
         self.u.keybd_event(vk, 0, 0x1, 0)        # KEYEVENTF_EXTENDEDKEY
         self.u.keybd_event(vk, 0, 0x1 | 0x2, 0)  # + KEYUP
 
+    def hotkey(self, *vks: int) -> None:
+        """Сочетание клавиш: нажать все по порядку, отпустить в обратном (например, Ctrl+V)."""
+        for vk in vks:
+            self.u.keybd_event(vk, 0, 0, 0)
+        for vk in reversed(vks):
+            self.u.keybd_event(vk, 0, 0x2, 0)
+
     def lock(self) -> None:
         self.u.LockWorkStation()
 
 
-def register_window_tools(reg: ToolRegistry, ctx: ToolContext, backend=None) -> None:
+def register_window_tools(reg: ToolRegistry, ctx: ToolContext, backend=None):
+    """Регистрирует инструменты и возвращает бэкенд (он нужен ещё и диктовке — нажать Ctrl+V)."""
     if backend is None:
         backend = UnsupportedBackend()
         if sys.platform.startswith("win"):
@@ -218,3 +226,5 @@ def register_window_tools(reg: ToolRegistry, ctx: ToolContext, backend=None) -> 
             return "[dry-run] заблокировала бы экран"
         backend.lock()
         return "экран заблокирован"
+
+    return backend
