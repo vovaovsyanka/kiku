@@ -122,9 +122,9 @@ tts:
   silero:
     model: "v5_ru"            # файл models/silero/<model>.pt (python scripts/download_models.py --only tts)
     model_dir: "models/silero"
-    speaker: "xenia"          # xenia | baya | kseniya (женские), aidar | eugene (мужские).
+    speaker: "baya"           # xenia | baya | kseniya (женские), aidar | eugene (мужские).
                               # Послушать все: python scripts/bench_tts.py --samples  (файлы в data/tts_samples)
-    pitch: "medium"           # тон: x-low | low | medium | high | x-high. «Милее» — high
+    pitch: "high"             # тон: x-low | low | medium | high | x-high. «Милее» — high
     rate: "medium"            # темп: x-slow | slow | medium | fast | x-fast
     sample_rate: 48000        # 8000 | 24000 | 48000
     device: "cpu"             # cpu | cuda:0 (видеопамять занята Whisper; на CPU Silero и так мгновенный)

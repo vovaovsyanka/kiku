@@ -45,7 +45,7 @@ def bench_silero(save_samples: bool, pitch: str | None, rate: str | None) -> Non
         print(f"{speaker:9s} {total_dur:5.1f} с звука за {total_took:4.2f} с  (RTF {total_took / total_dur:.3f})")
         if save_samples:
             import numpy as np
-            sf.write(str(out_dir / f"silero_{speaker}.wav"), np.concatenate(parts), sr)
+            sf.write(str(out_dir / f"silero_{speaker}_{cfg.silero.pitch}_{cfg.silero.rate}.wav"), np.concatenate(parts), sr)
     if save_samples:
         print(f"\nФайлы лежат в {out_dir}. Понравившийся голос впишите в config.yaml, tts.silero.speaker "
               "(тон и темп — tts.silero.pitch / rate).")
